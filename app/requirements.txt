@@ -3,3 +3,9 @@ openai
 faiss-cpu
 unstructured
 pymupdf
+langchain-huggingface
+transformers
+sentencepiece
+pdfplumber
+pandas
+tqdm

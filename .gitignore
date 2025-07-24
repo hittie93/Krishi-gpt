@@ -1,0 +1,4 @@
+/venv
+/venv310
+/backend/.env
+/app/.env
