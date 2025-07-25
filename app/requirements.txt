@@ -11,3 +11,6 @@ pdfplumber
 pandas
 tqdm
 python-dotenv
+streamlit-mic-recorder
+SpeechRecognition
+gTTS
