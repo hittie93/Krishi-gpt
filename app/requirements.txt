@@ -21,3 +21,4 @@ SpeechRecognition
 gTTS
 torch
 pydub
+streamlit-mic-recorder

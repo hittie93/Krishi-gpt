@@ -1,16 +1,19 @@
 # app/main.py
-import sys, os, io
+import sys
+import os
+import io
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 import dotenv
+
 dotenv.load_dotenv()
 
 from backend.rag_pipeline import answer_query_for_ui
-from backend.tts_response import text_to_speech  # for UI playback
+from backend.tts_response import text_to_speech
 
-
-# ------- Optional voice libs (handled gracefully) -------
+# Optional voice libs (loaded lazily / guarded)
 HAS_MIC = False
 try:
     from streamlit_mic_recorder import mic_recorder
@@ -20,13 +23,42 @@ except Exception:
 
 HAS_SR = False
 try:
-    import speech_recognition as sr
+    import speech_recognition as sr  # noqa: F401  (used inside voice_input)
     HAS_SR = True
 except Exception:
     pass
+
+HAS_PYDUB = False
+try:
+    from pydub import AudioSegment  # noqa: F401
+    HAS_PYDUB = True
+except Exception:
+    pass
+
+# our robust converter/transcriber
+from app.voice_input import transcribe_audio_bytes
+
 # -------------------------------------------------------
 
 st.set_page_config(page_title="KrishiGPT 🌾", page_icon="🌾", layout="wide")
+
+st.markdown(
+    """
+    <style>
+        .block-container {padding-top: 2rem; padding-bottom: 2rem;}
+        .stTextArea textarea { background: #10151d !important; color: #d1d5db !important; }
+        .stButton>button {
+            background: #10b981 !important;
+            color: white !important;
+            border-radius: 8px !important;
+            border: none !important;
+            padding: 0.6rem 1.1rem !important;
+            font-weight: 600 !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.title("🌾 KrishiGPT – किसान का AI साथी")
 st.caption("Hindi / English • RAG + Gemini/Groq fallback • FAISS • TTS • Voice input")
@@ -38,33 +70,8 @@ with st.sidebar:
     play_audio = st.checkbox("🔊 Speak answer", value=False)
     show_context = st.checkbox("📚 Show retrieved context", value=True)
     top_k = st.slider("Top context chunks to display", 1, 10, 3)
+
 st.write("---")
-
-# ---------------- Voice helpers ----------------
-def transcribe_audio_bytes(audio_bytes: bytes, language_hint: str = "hi-IN") -> str:
-    """Transcribe WAV/MP3 bytes to text using SpeechRecognition (Google Web API)."""
-    if not HAS_SR:
-        st.error("SpeechRecognition is not installed. Run: `pip install SpeechRecognition`")
-        return ""
-
-    recognizer = sr.Recognizer()
-    try:
-        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
-            audio = recognizer.record(source)
-        # try Hindi first, then English
-        for lang in [language_hint, "en-IN", "en-US", "hi-IN"]:
-            try:
-                txt = recognizer.recognize_google(audio, language=lang)
-                if txt.strip():
-                    return txt
-            except sr.UnknownValueError:
-                continue
-            except sr.RequestError as e:
-                st.error(f"Speech API error: {e}")
-                break
-    except Exception as e:
-        st.error(f"Could not process audio: {e}")
-    return ""
 
 # ---------------- UI: Text mode ----------------
 def text_mode_ui():
@@ -72,7 +79,7 @@ def text_mode_ui():
     user_q = st.text_area(
         "Type in Hindi or English",
         placeholder="उदाहरण: धान की फसल के लिए सबसे अच्छा उर्वरक क्या है?\nExample: What is the best fertilizer for rice crops?",
-        height=120
+        height=120,
     )
 
     if st.button("🤖 Get Answer"):
@@ -82,6 +89,13 @@ def text_mode_ui():
 def voice_mode_ui():
     st.markdown("#### 🎤 बोलकर पूछें / Ask by speaking")
 
+    if not HAS_SR or not HAS_PYDUB:
+        st.error(
+            "Voice mode needs `SpeechRecognition` and `pydub`. "
+            "Install them and ensure FFmpeg is available on PATH."
+        )
+        return
+
     transcribed_text = ""
 
     if HAS_MIC:
@@ -90,23 +104,32 @@ def voice_mode_ui():
             start_prompt="🎙️ Start recording",
             stop_prompt="🛑 Stop",
             just_once=False,
+            format="webm",  # what the component usually yields
             key="mic",
         )
-        if audio_dict and "bytes" in audio_dict and audio_dict["bytes"] is not None:
+        if audio_dict and "bytes" in audio_dict and audio_dict["bytes"]:
             with st.spinner("Transcribing..."):
-                transcribed_text = transcribe_audio_bytes(audio_dict["bytes"])
-                if transcribed_text:
-                    st.success(f"🗣️ You said: **{transcribed_text}**")
+                try:
+                    transcribed_text = transcribe_audio_bytes(audio_dict["bytes"])
+                    if transcribed_text:
+                        st.success(f"🗣️ You said: **{transcribed_text}**")
+                except Exception as e:
+                    st.error(str(e))
     else:
-        st.warning("`streamlit-mic-recorder` not installed or not supported. Falling back to file upload.")
-        uploaded = st.file_uploader("Upload a WAV/MP3 file", type=["wav", "mp3"])
+        st.warning(
+            "`streamlit-mic-recorder` not installed / supported. "
+            "Upload an audio file instead."
+        )
+        uploaded = st.file_uploader("Upload a WAV/MP3/M4A/WebM file", type=None)
         if uploaded:
             with st.spinner("Transcribing..."):
-                transcribed_text = transcribe_audio_bytes(uploaded.read())
-                if transcribed_text:
-                    st.success(f"🗣️ You said: **{transcribed_text}**")
+                try:
+                    transcribed_text = transcribe_audio_bytes(uploaded.read())
+                    if transcribed_text:
+                        st.success(f"🗣️ You said: **{transcribed_text}**")
+                except Exception as e:
+                    st.error(str(e))
 
-    # If we got text from mic/upload, show "Get Answer"
     if transcribed_text:
         if st.button("🤖 Get Answer (from voice)"):
             run_pipeline(transcribed_text)
@@ -130,16 +153,19 @@ def run_pipeline(query: str):
 
     # Optional audio
     if play_audio:
-        fp = text_to_speech(
-            result["answer"],
-            lang="hi" if result["lang"] == "hi" else "en",
-            autoplay=False
-        )
-        if fp and os.path.exists(fp):
-            with open(fp, "rb") as f:
-                st.audio(f.read(), format="audio/mp3")
-        else:
-            st.info("Audio could not be generated.")
+        try:
+            fp = text_to_speech(
+                result["answer"],
+                lang="hi" if result["lang"] == "hi" else "en",
+                autoplay=False,
+            )
+            if fp and os.path.exists(fp):
+                with open(fp, "rb") as f:
+                    st.audio(f.read(), format="audio/mp3")
+            else:
+                st.info("Audio could not be generated.")
+        except Exception as e:
+            st.info(f"Audio could not be generated: {e}")
 
     # Show English version as debug (optional)
     with st.expander("🔤 English debug answer"):
