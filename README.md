@@ -45,4 +45,37 @@ It uses **Generative AI + RAG (Retrieval-Augmented Generation)** to answer queri
 ---
 
 ## **📂 Project Structure**
+KrishiGPT/
+│
+├── app/
+│   ├── main.py              # Streamlit frontend (UI for farmers)
+│   └── voice_input.py       # Voice input handler (speech-to-text)
+│
+├── backend/
+│   ├── rag_pipeline.py      # RAG pipeline (FAISS + LLM)
+│   ├── tts_response.py      # Text-to-Speech generation
+│   ├── translate.py         # Hindi-English translation
+│   └── language_utils.py    # Language detection and handling
+│
+├── data/
+│   ├── pdfs/                # Government schemes & crop guides (raw PDFs)
+│   ├── cleaned_docs/        # Cleaned and chunked documents
+│   └── faiss_index/         # FAISS vector index for semantic search
+│
+├── notebooks/
+│   ├── pdf_cleaning.py      # Script for cleaning & parsing PDFs
+│   ├── test_embeddings.py   # Testing embedding generation
+│   └── translate_eval.py    # Translation evaluation experiments
+│
+├── vectorstore/
+│   ├── index.faiss          # FAISS vector database
+│   └── index.pkl            # Metadata for embeddings
+│
+
+│
+├── requirements.txt         # Python dependencies
+├── .env                     # API keys and configuration
+├── README.md                # Project documentation
+└── 
+
 
