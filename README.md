@@ -87,7 +87,7 @@ pip install -r old_requirements.txt
 ### **3. Prepare `.env` File**  
 Create a `.env` file in the root directory:  
 ```
-OPENAI_API_KEY=your_openai_key
+GEMINI_API_KEY=Gemini_api_key
 GROQ_API_KEY=your_groq_api_key
 ```
 
@@ -100,7 +100,7 @@ python backend/build_faiss_index.py
 ```bash
 streamlit run app/main.py
 ```
-Open your browser at **http://localhost:8501** to access KrishiGPT.  
+Open your browser at **(https://krishi-gpt-rkct23hcraxqszxwynfbux.streamlit.app/)** to access KrishiGPT.  
 
 ---
 
