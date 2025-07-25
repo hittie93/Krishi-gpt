@@ -14,3 +14,4 @@ python-dotenv
 streamlit-mic-recorder
 SpeechRecognition
 gTTS
+langchain-community
