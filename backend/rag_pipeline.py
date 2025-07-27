@@ -155,15 +155,29 @@ def _call_llm_open(llm, question: str) -> str:
 def _answer_with_fallback(question: str) -> Tuple[str, List[Document]]:
     docs = []
     try:
+        # Step 1: Try with RAG
         answer, docs = _call_llm_with_rag(gemini_llm, question)
-        if not answer or "I can only assist" in answer:
+
+        # Step 2: Check if RAG answer is invalid or not helpful
+        if (not answer or len(answer) < 10 or
+            "cannot be answered" in answer.lower() or
+            "no information" in answer.lower() or
+            "I can only assist" in answer):
+            print("⚠️ RAG did not give a valid answer. Switching to open-domain Gemini.")
             answer = _call_llm_open(gemini_llm, question)
+
         return answer, docs
+
     except Exception as e:
+        print(f"⚠️ Error in Gemini RAG: {e}")
         if groq_llm:
+            print("⚠️ Switching to Groq fallback.")
             answer, docs = _call_llm_with_rag(groq_llm, question)
+            if not answer or len(answer) < 10:
+                answer = _call_llm_open(groq_llm, question)
             return answer, docs
         raise e
+
 
 # === Public APIs ===
 def ask_question(query: str):
