@@ -1,47 +1,35 @@
 import sys
 import os
+import requests
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import dotenv
 from typing import List, Tuple, Optional
-
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 from langchain.schema import Document
 
-from backend.translate import translate_to_english, translate_from_english, detect_language
+from backend.translate import detect_language, translate_to_english, translate_from_english
 from backend.tts_response import speak_response
-
-# (optional) for nicer error handling of Google GenAI
-try:
-    from google.api_core.exceptions import ServiceUnavailable
-except Exception:  # pragma: no cover
-    ServiceUnavailable = Exception
 
 dotenv.load_dotenv()
 
-# === Configuration ===
+# === API KEYS ===
 GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")  # Add this in .env
 
 if not GOOGLE_API_KEY:
     raise ValueError("❌ GEMINI_API_KEY not set in .env file")
-if not GROQ_API_KEY:
-    print("⚠️ GROQ_API_KEY not set. Groq fallback will be disabled.")
 
-# === Embeddings ===
-embedding_model = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
-
-# === FAISS Index Path ===
+# === Embeddings & Vector DB ===
+embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 FAISS_INDEX_PATH = "data/faiss_index"
 
 def build_faiss_index():
-    """Build FAISS index if not found."""
     print("⚠️ FAISS index not found. Building a new one...")
     docs_folder = "data/cleaned_docs"
     documents = []
@@ -54,14 +42,13 @@ def build_faiss_index():
                     documents.append(Document(page_content=content))
 
     if not documents:
-        raise FileNotFoundError("❌ No documents found in data/cleaned_docs to build FAISS index.")
+        raise FileNotFoundError("❌ No documents found in data/cleaned_docs.")
 
     vectorstore = FAISS.from_documents(documents, embedding_model)
     os.makedirs(FAISS_INDEX_PATH, exist_ok=True)
     vectorstore.save_local(FAISS_INDEX_PATH)
     print("✅ FAISS index built successfully.")
 
-# === Load or Build Vector Store ===
 if not os.path.exists(os.path.join(FAISS_INDEX_PATH, "index.faiss")):
     build_faiss_index()
 
@@ -76,160 +63,144 @@ retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 gemini_llm = ChatGoogleGenerativeAI(
     model="gemini-1.5-flash",
     google_api_key=GOOGLE_API_KEY,
-    convert_system_message_to_human=True,
     temperature=0.3,
 )
 
-groq_llm = None
-if GROQ_API_KEY:
-    groq_llm = ChatGroq(
-        model="llama3-70b-8192",
-        groq_api_key=GROQ_API_KEY,
-        temperature=0.3,
-    )
+groq_llm = ChatGroq(
+    model="llama3-70b-8192",
+    groq_api_key=GROQ_API_KEY,
+    temperature=0.3,
+) if GROQ_API_KEY else None
 
 # === Prompts ===
 RAG_PROMPT = PromptTemplate(
     input_variables=["context", "question"],
     template=(
-        "You are KrishiGPT, an agriculture assistant. "
-        "Answer the question **only** using the provided context. If the context "
-        "doesn't contain the answer, say so clearly.\n\n"
-        "Context:\n{context}\n\n"
-        "Question:\n{question}\n\n"
-        "Answer:"
+        "You are KrishiGPT, an agriculture assistant. Answer the question "
+        "ONLY using the provided context. Do not answer unrelated questions.\n\n"
+        "Context:\n{context}\n\nQuestion:\n{question}\nAnswer:"
     ),
 )
 
 OPEN_WEB_PROMPT = PromptTemplate(
     input_variables=["question"],
     template=(
-        "You are KrishiGPT, an agriculture expert. The local knowledge base "
-        "does not contain the answer. Provide a concise, accurate answer from your "
-        "general knowledge. If discussing Indian government schemes, clearly name "
-        "the scheme, eligibility, benefits, and application steps.\n\n"
-        "Question:\n{question}\n\n"
-        "Answer:"
+        "You are KrishiGPT, an agriculture expert. Provide an answer ONLY about "
+        "crops, farming, fertilizers, soil, pesticides, weather, or Indian govt schemes. "
+        "If the question is unrelated (e.g., sports, movies), say: "
+        "'I can only assist with agriculture-related queries.'\n\n"
+        "Question:\n{question}\nAnswer:"
     ),
 )
 
-# ---------- Core helpers ----------
-
-def _is_unhelpful_answer(text: str) -> bool:
-    """Detects useless answers from FAISS-based RAG."""
-    if not text:
-        return True
-    text_lower = text.lower().strip()
-    return (
-        "does not contain" in text_lower
-        or "no information available" in text_lower
-        or "i don't know" in text_lower
-    )
-
-def _call_llm_with_rag(llm, question_en: str) -> Tuple[str, List[Document]]:
-    """Retrieve context and answer with RAG. Returns (answer_en, docs)."""
-    docs = retriever.invoke(question_en)
-    context = "\n".join(d.page_content for d in docs if d.page_content.strip())
-    if not context.strip():
-        return "", docs  # signal empty context
-    prompt = RAG_PROMPT.format(context=context, question=question_en)
-    resp = llm.invoke(prompt)
-    text = resp.content.strip() if hasattr(resp, "content") else str(resp).strip()
-    return text, docs
-
-def _call_llm_open(llm, question_en: str) -> str:
-    """Direct LLM call without RAG (fallback)."""
-    prompt = OPEN_WEB_PROMPT.format(question=question_en)
-    resp = llm.invoke(prompt)
-    return resp.content.strip() if hasattr(resp, "content") else str(resp).strip()
-
-def _answer_with_fallback(question_en: str) -> Tuple[str, List[Document], bool]:
-    """
-    Try: RAG with Gemini → (if empty context/unhelpful) direct Gemini →
-    (if fails / quota) Groq (RAG first, then open).
-    """
-    used_open_fallback = False
-    docs: List[Document] = []
-
+# === Weather Integration ===
+def get_weather_info(location: str) -> str:
+    if not WEATHER_API_KEY:
+        return "Weather API key not set."
     try:
-        answer_en, docs = _call_llm_with_rag(gemini_llm, question_en)
-        if _is_unhelpful_answer(answer_en):
-            print("⚠️ No relevant info in documents. Falling back to Gemini (open).")
-            used_open_fallback = True
-            answer_en = _call_llm_open(gemini_llm, question_en)
-        return answer_en, docs, used_open_fallback
-
-    except (ServiceUnavailable, Exception) as e:
-        err = str(e).lower()
-        if groq_llm and ("429" in err or "quota" in err or "serviceunavailable" in err or "503" in err):
-            print("⚠️ Gemini unavailable/quota exceeded. Falling back to Groq (Llama3-70B).")
-            try:
-                answer_en, docs = _call_llm_with_rag(groq_llm, question_en)
-                if _is_unhelpful_answer(answer_en):
-                    print("⚠️ No context with Groq. Using Groq (open).")
-                    used_open_fallback = True
-                    answer_en = _call_llm_open(groq_llm, question_en)
-                return answer_en, docs, used_open_fallback
-            except Exception as e2:
-                raise RuntimeError(f"Groq fallback also failed: {e2}") from e2
-        raise
-
-# ---------- Public API ----------
-def ask_question(query: str):
-    print(f"🔍 Input Query: {query}")
-
-    detected_lang = detect_language(query)
-    print(f"🌐 Detected Language: {detected_lang}")
-
-    translated_query = translate_to_english(query) if detected_lang != 'en' else query
-    print(f"🌐 Translated Query (EN): {translated_query}")
-
-    # Get answer with fallback
-    answer_en, _, _ = _answer_with_fallback(translated_query)
-    print(f"✅ Answer (EN): {answer_en}")
-
-    final_answer = translate_from_english(answer_en, query) if detected_lang != 'en' else answer_en
-    print(f"🌐 Final Answer: {final_answer}")
-
-    try:
-        speak_response(final_answer, lang=detected_lang)
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={WEATHER_API_KEY}&units=metric"
+        response = requests.get(url).json()
+        if response.get("cod") != 200:
+            return "Weather data not found for this location."
+        main = response['main']
+        weather = response['weather'][0]['description']
+        temp = main['temp']
+        feels_like = main['feels_like']
+        return f"Current weather in {location.title()}: {weather}, Temp: {temp}°C (Feels like {feels_like}°C)."
     except Exception as e:
-        print(f"❌ TTS generation failed: {e}")
+        return f"Error fetching weather: {e}"
 
-    return final_answer
+def get_weather_with_crop_advice(location: str, crop_query: str) -> str:
+    weather_info = get_weather_info(location)
+    if "Weather data not found" in weather_info or "Error" in weather_info:
+        return weather_info
+
+    analysis_prompt = (
+        f"{weather_info}\n\nBased on this weather, provide crop precautions, "
+        f"pest control tips, and recommendations for farmers. Query: {crop_query}"
+    )
+    try:
+        resp = gemini_llm.invoke(analysis_prompt)
+        return weather_info + "\n\nAgriculture Advice: " + resp.content.strip()
+    except Exception:
+        return weather_info
+
+def detect_weather_query(query: str) -> Optional[str]:
+    keywords = ["weather", "temperature", "rain", "forecast", "मौसम", "बारिश", "तापमान"]
+    if any(kw.lower() in query.lower() for kw in keywords):
+        words = query.split()
+        for i, w in enumerate(words):
+            if w.lower() in ["in", "at", "of"] and i + 1 < len(words):
+                return words[i + 1]
+        return "Delhi"
+    return None
+
+# === Core Answer Logic ===
+def _call_llm_with_rag(llm, question: str) -> Tuple[str, List[Document]]:
+    docs = retriever.invoke(question)
+    context = "\n".join(d.page_content for d in docs)
+    if not context.strip():
+        return "", docs
+    prompt = RAG_PROMPT.format(context=context, question=question)
+    resp = llm.invoke(prompt)
+    return resp.content.strip(), docs
+
+def _call_llm_open(llm, question: str) -> str:
+    prompt = OPEN_WEB_PROMPT.format(question=question)
+    resp = llm.invoke(prompt)
+    return resp.content.strip()
+
+def _answer_with_fallback(question: str) -> Tuple[str, List[Document]]:
+    docs = []
+    try:
+        answer, docs = _call_llm_with_rag(gemini_llm, question)
+        if not answer or "I can only assist" in answer:
+            answer = _call_llm_open(gemini_llm, question)
+        return answer, docs
+    except Exception as e:
+        if groq_llm:
+            answer, docs = _call_llm_with_rag(groq_llm, question)
+            return answer, docs
+        raise e
+
+# === Public APIs ===
+def ask_question(query: str):
+    print(f"🔍 Query: {query}")
+    lang = detect_language(query)
+
+    location = detect_weather_query(query)
+    if location:
+        answer = get_weather_with_crop_advice(location, query)
+        return translate_from_english(answer, query) if lang != "en" else answer
+
+    answer, _ = _answer_with_fallback(query)
+    return translate_from_english(answer, query) if lang != "en" else answer
 
 def answer_query_for_ui(query: str, top_k: int = 3, speak: bool = False):
     lang = detect_language(query)
-    q_en = translate_to_english(query) if lang != "en" else query
 
-    docs = retriever.invoke(q_en)[:top_k]
-    answer_en, _, used_open = _answer_with_fallback(q_en)
-    final = translate_from_english(answer_en, query) if lang != "en" else answer_en
+    location = detect_weather_query(query)
+    if location:
+        final = get_weather_with_crop_advice(location, query)
+        final = translate_from_english(final, query) if lang != "en" else final
+        return {
+            "lang": lang,
+            "answer_en": final if lang == "en" else translate_to_english(final),
+            "answer": final,
+            "contexts": [],
+            "used_open_fallback": False,
+            "audio_path": None,
+        }
 
-    audio_path: Optional[str] = None
-    if speak:
-        try:
-            audio_path = speak_response(final, lang=lang)
-        except Exception as e:
-            print(f"🔇 TTS failed (continuing without voice): {e}")
+    docs = retriever.invoke(query)[:top_k]
+    answer, _ = _answer_with_fallback(query)
+    final = translate_from_english(answer, query) if lang != "en" else answer
 
     return {
         "lang": lang,
-        "answer_en": answer_en,
+        "answer_en": answer,
         "answer": final,
         "contexts": [d.page_content for d in docs],
-        "used_open_fallback": used_open,
-        "audio_path": audio_path,
+        "used_open_fallback": False,
+        "audio_path": None,
     }
-
-# ---------- CLI loop ----------
-if __name__ == "__main__":
-    while True:
-        q = input("\n❓ Ask your farming question: ")
-        if q.lower() in {"exit", "quit"}:
-            break
-        try:
-            resp = ask_question(q)
-            print("\n💬 Response:", resp)
-        except Exception as e:
-            print(f"❌ Error: {e}")
