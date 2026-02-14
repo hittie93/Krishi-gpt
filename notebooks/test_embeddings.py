@@ -7,7 +7,7 @@ import pickle
 
 # --- Always save to project root's vectorstore directory ---
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VECTORSTORE_DIR = os.path.join(PROJECT_ROOT, "vectorstore")
+VECTORSTORE_DIR = os.path.join(PROJECT_ROOT, "data", "faiss_index")
 os.makedirs(VECTORSTORE_DIR, exist_ok=True)
 
 # 🧠 Step 2: Load Embedding Model (you can change model here)
@@ -44,9 +44,9 @@ print("\n🔍 Top Results for Query:")
 for rank, idx in enumerate(I[0]):
     print(f"{rank+1}. {all_chunks[idx][:200]}...\n")
 
-# 💾 Save FAISS index & metadata for reuse in project root's vectorstore/
+# 💾 Save FAISS index & metadata for reuse in data/faiss_index/
 faiss.write_index(index, os.path.join(VECTORSTORE_DIR, "index.faiss"))
 with open(os.path.join(VECTORSTORE_DIR, "index.pkl"), "wb") as f:
     pickle.dump(all_chunks, f)
 
-print("✅ FAISS index and metadata saved to vectorstore/ as index.faiss and index.pkl")
+print("✅ FAISS index and metadata saved to data/faiss_index/ as index.faiss and index.pkl")

@@ -3,12 +3,16 @@ import sys
 import os
 import io
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Define project root
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(PROJECT_ROOT)
 
 import streamlit as st
 import dotenv
 
-dotenv.load_dotenv()
+# Load .env from root
+dotenv.load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 from backend.rag_pipeline import answer_query_for_ui
 from backend.tts_response import text_to_speech

@@ -1,7 +1,10 @@
 import sys
 import os
 import requests
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Define project root
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(PROJECT_ROOT)
 
 import dotenv
 from typing import List, Tuple, Optional
@@ -15,7 +18,8 @@ from langchain.schema import Document
 from backend.translate import detect_language, translate_to_english, translate_from_english
 from backend.tts_response import speak_response
 
-dotenv.load_dotenv()
+# Load .env from root
+dotenv.load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 # === API KEYS ===
 GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY")
