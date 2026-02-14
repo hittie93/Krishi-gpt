@@ -61,17 +61,17 @@ vectorstore = FAISS.load_local(
     embeddings=embedding_model,
     allow_dangerous_deserialization=True
 )
-retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
 # === LLMs ===
 gemini_llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash",
+    model="gemini-3-flash",
     google_api_key=GOOGLE_API_KEY,
     temperature=0.3,
 )
 
 groq_llm = ChatGroq(
-    model="llama3-70b-8192",
+    model="llama-3.1-8b-instant",
     groq_api_key=GROQ_API_KEY,
     temperature=0.3,
 ) if GROQ_API_KEY else None
@@ -144,12 +144,21 @@ def detect_weather_query(query: str) -> Optional[str]:
 # === Core Answer Logic ===
 def _call_llm_with_rag(llm, question: str) -> Tuple[str, List[Document]]:
     docs = retriever.invoke(question)
-    context = "\n".join(d.page_content for d in docs)
+
+    # ✅ Token-optimized context compression
+    MAX_CHARS_PER_DOC = 700   # prevents huge prompts
+    MAX_DOCS = 3              # keep small context window
+
+    trimmed_docs = docs[:MAX_DOCS]
+    context = "\n".join(
+        d.page_content[:MAX_CHARS_PER_DOC] for d in trimmed_docs
+    )
     if not context.strip():
         return "", docs
     prompt = RAG_PROMPT.format(context=context, question=question)
     resp = llm.invoke(prompt)
     return resp.content.strip(), docs
+
 
 def _call_llm_open(llm, question: str) -> str:
     prompt = OPEN_WEB_PROMPT.format(question=question)
@@ -158,28 +167,46 @@ def _call_llm_open(llm, question: str) -> str:
 
 def _answer_with_fallback(question: str) -> Tuple[str, List[Document]]:
     docs = []
+
     try:
-        # Step 1: Try with RAG
+        # Step 1: Try RAG first
         answer, docs = _call_llm_with_rag(gemini_llm, question)
 
-        # Step 2: Check if RAG answer is invalid or not helpful
-        if (not answer or len(answer) < 10 or
-            "cannot be answered" in answer.lower() or
-            "no information" in answer.lower() or
-            "I can only assist" in answer):
-            print("⚠️ RAG did not give a valid answer. Switching to open-domain Gemini.")
+        # 🚨 Strong fallback detection
+        LOW_CONFIDENCE = [
+            "provided context",
+            "not mentioned",
+            "no information",
+            "cannot be answered",
+            "insufficient context",
+            "not available in the context",
+            "unfortunately"
+        ]
+
+        weak_answer = (
+            not answer
+            or len(answer) < 25
+            or any(p in answer.lower() for p in LOW_CONFIDENCE)
+        )
+
+        if weak_answer:
+            print("⚠️ Weak RAG response detected → Switching to Open LLM")
             answer = _call_llm_open(gemini_llm, question)
 
         return answer, docs
 
     except Exception as e:
         print(f"⚠️ Error in Gemini RAG: {e}")
+
         if groq_llm:
             print("⚠️ Switching to Groq fallback.")
             answer, docs = _call_llm_with_rag(groq_llm, question)
-            if not answer or len(answer) < 10:
+
+            if not answer or "context" in answer.lower():
                 answer = _call_llm_open(groq_llm, question)
+
             return answer, docs
+
         raise e
 
 

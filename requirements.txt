@@ -1,9 +1,10 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 streamlit
-langchain-google-genai
-langchain
-langchain-community
-langchain-openai
-langchain-groq
+langchain==0.3.26
+langchain-core==0.3.69
+langchain-community==0.3.27
+langchain-google-genai==2.0.6
+langchain-groq==0.2.0
 openai
 faiss-cpu
 unstructured
@@ -18,8 +19,7 @@ tqdm
 python-dotenv
 streamlit-mic-recorder
 SpeechRecognition
-gTTS
-torch
+gtts
+torch==2.2.2+cpu
 pydub
-streamlit-mic-recorder
 typing
