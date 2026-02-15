@@ -30,7 +30,18 @@ if not GOOGLE_API_KEY:
     raise ValueError("❌ GEMINI_API_KEY not set in .env file")
 
 # === Embeddings & Vector DB ===
-embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+# === Embeddings & Vector DB ===
+# Lazy load embeddings to avoid memory crash on Render
+embedding_model = None
+
+def get_embedding_model():
+    global embedding_model
+    if embedding_model is None:
+        print("⚡ Loading embedding model...")
+        from langchain_huggingface import HuggingFaceEmbeddings
+        embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    return embedding_model
+
 FAISS_INDEX_PATH = "data/faiss_index"
 
 def build_faiss_index():
@@ -48,7 +59,7 @@ def build_faiss_index():
     if not documents:
         raise FileNotFoundError("❌ No documents found in data/cleaned_docs.")
 
-    vectorstore = FAISS.from_documents(documents, embedding_model)
+    vectorstore = FAISS.from_documents(documents, get_embedding_model())
     os.makedirs(FAISS_INDEX_PATH, exist_ok=True)
     vectorstore.save_local(FAISS_INDEX_PATH)
     print("✅ FAISS index built successfully.")
@@ -56,9 +67,10 @@ def build_faiss_index():
 if not os.path.exists(os.path.join(FAISS_INDEX_PATH, "index.faiss")):
     build_faiss_index()
 
+# Load FAISS with lazy embeddings
 vectorstore = FAISS.load_local(
     FAISS_INDEX_PATH,
-    embeddings=embedding_model,
+    embeddings=get_embedding_model(),
     allow_dangerous_deserialization=True
 )
 retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
