@@ -100,7 +100,7 @@ python backend/build_faiss_index.py
 ```bash
 streamlit run app/main.py
 ```
-Open your browser at **(https://krishi-gpt-rkct23hcraxqszxwynfbux.streamlit.app/)** to access KrishiGPT.  
+Open your browser at **(https://krishi-gpt-6x1n.onrender.com/)** to access KrishiGPT.  
 
 ---
 
